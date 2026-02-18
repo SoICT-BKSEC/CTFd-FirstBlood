@@ -1,3 +1,4 @@
+import logging
 import threading
 import requests
 from sqlalchemy import event, text
@@ -9,6 +10,8 @@ from CTFd.forms import BaseForm
 from CTFd.forms.fields import SubmitField
 from wtforms import StringField
 from wtforms.validators import Optional
+
+logger = logging.getLogger(__name__)
 
 
 def is_valid_webhook(url: str) -> bool:
@@ -40,15 +43,20 @@ def send_discord_webhook_sync(webhook: str, message: str) -> tuple[bool, str]:
 
 @event.listens_for(Solves, "after_insert")
 def first_blood_listener(mapper, connection, solve):
+    logger.info("[FirstBlood] after_insert fired: challenge_id=%s user_id=%s", solve.challenge_id, solve.user_id)
     challenge_id = solve.challenge_id
 
-    result = connection.execute(
-        text(
-            "SELECT COUNT(*) FROM solves WHERE challenge_id = :cid FOR UPDATE"
-        ),
-        {"cid": challenge_id},
-    )
-    count = result.scalar()
+    try:
+        result = connection.execute(
+            text("SELECT COUNT(*) FROM solves WHERE challenge_id = :cid"),
+            {"cid": challenge_id},
+        )
+        count = result.scalar()
+    except Exception as e:
+        logger.error("[FirstBlood] count query failed: %s", e)
+        return
+
+    logger.info("[FirstBlood] solve count for challenge %s: %d", challenge_id, count)
     if count != 1:
         return
 
@@ -70,6 +78,7 @@ def first_blood_listener(mapper, connection, solve):
         ).fetchone()
 
     if not challenge_row or not user_row:
+        logger.warning("[FirstBlood] missing rows: challenge=%s user=%s", challenge_row, user_row)
         return
 
     solver_name = team_row.name if team_row else user_row.name
@@ -78,9 +87,12 @@ def first_blood_listener(mapper, connection, solve):
     message = f"🎯🩸 First Blood for challenge **{challenge_name}** goes to **{solver_name}**"
 
     webhook = get_config("FIRST_BLOOD_WEBHOOK")
+    logger.info("[FirstBlood] webhook config: %s", webhook)
     if not webhook or not is_valid_webhook(webhook):
+        logger.warning("[FirstBlood] webhook not set or invalid, skipping")
         return
 
+    logger.info("[FirstBlood] spawning thread to send webhook for challenge %s", challenge_name)
     threading.Thread(
         target=send_discord_webhook,
         args=(webhook, message),
