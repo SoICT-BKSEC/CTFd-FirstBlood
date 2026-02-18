@@ -26,6 +26,21 @@ def send_discord_webhook(message: str):
         pass
 
 
+def send_discord_webhook_sync(webhook: str, message: str) -> tuple[bool, str]:
+    """Send a webhook synchronously and return (success, error_message)."""
+    try:
+        resp = requests.post(webhook, json={"content": message}, timeout=5)
+        if resp.status_code in (200, 204):
+            return True, ""
+        return False, f"Discord returned HTTP {resp.status_code}: {resp.text[:200]}"
+    except requests.exceptions.ConnectionError as e:
+        return False, f"Connection error: {e}"
+    except requests.exceptions.Timeout:
+        return False, "Request timed out after 5 seconds"
+    except Exception as e:
+        return False, str(e)
+
+
 @event.listens_for(Solves, "after_insert")
 def first_blood_listener(mapper, connection, solve):
     challenge_id = solve.challenge_id
@@ -113,17 +128,14 @@ def test_webhook():
         flash("No valid webhook configured.", "danger")
         return redirect(url_for("first_blood_admin.first_blood_settings"))
 
-    threading.Thread(
-        target=send_discord_webhook,
-        args=("🩸 First Blood test message from CTFd",),
-        daemon=True,
-    ).start()
-    threading.Thread(
-        target=send_discord_webhook,
-        args=("🎯🩸 First Blood for a non-existent challenge **hehehehehe** goes to **BKSEC Organizers**",),
-        daemon=True,
-    ).start()
-    flash("Test message sent.", "info")
+    ok, err = send_discord_webhook_sync(
+        webhook,
+        "🎯🩸 First Blood for **Test Challenge** goes to **BKSEC Organizers** (test message)",
+    )
+    if ok:
+        flash("Test message sent successfully to Discord.", "success")
+    else:
+        flash(f"Failed to send test message: {err}", "danger")
     return redirect(url_for("first_blood_admin.first_blood_settings"))
 
 
