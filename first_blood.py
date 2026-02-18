@@ -16,10 +16,7 @@ def is_valid_webhook(url: str) -> bool:
            url.startswith("https://discordapp.com/api/webhooks/")
 
 
-def send_discord_webhook(message: str):
-    webhook = get_config("FIRST_BLOOD_WEBHOOK")
-    if not webhook or not is_valid_webhook(webhook):
-        return
+def send_discord_webhook(webhook: str, message: str):
     try:
         requests.post(webhook, json={"content": message}, timeout=5)
     except Exception:
@@ -80,9 +77,13 @@ def first_blood_listener(mapper, connection, solve):
 
     message = f"🎯🩸 First Blood for challenge **{challenge_name}** goes to **{solver_name}**"
 
+    webhook = get_config("FIRST_BLOOD_WEBHOOK")
+    if not webhook or not is_valid_webhook(webhook):
+        return
+
     threading.Thread(
         target=send_discord_webhook,
-        args=(message,),
+        args=(webhook, message),
         daemon=True,
     ).start()
 
