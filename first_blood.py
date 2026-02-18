@@ -134,7 +134,6 @@ def load(app):
                 return result
 
             webhook = get_config("FIRST_BLOOD_WEBHOOK")
-            logger.warning("[FirstBlood] webhook=%s", webhook)
             if not webhook or not is_valid_webhook(webhook):
                 return result
 
