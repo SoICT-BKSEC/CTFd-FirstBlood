@@ -1,11 +1,13 @@
 import logging
-import threading
 import requests
-from sqlalchemy import event, text
+from functools import wraps
 from flask import Blueprint, request, redirect, url_for, flash, render_template
-from CTFd.models import Solves, Challenges, Users, Teams, db
+from flask.wrappers import Response
+from CTFd.models import Solves, Challenges
 from CTFd.utils.decorators import admins_only
 from CTFd.utils import get_config, set_config
+from CTFd.utils import config as ctfd_config
+from CTFd.utils.user import get_current_user, get_current_team
 from CTFd.forms import BaseForm
 from CTFd.forms.fields import SubmitField
 from wtforms import StringField
@@ -17,13 +19,6 @@ logger = logging.getLogger(__name__)
 def is_valid_webhook(url: str) -> bool:
     return url.startswith("https://discord.com/api/webhooks/") or \
            url.startswith("https://discordapp.com/api/webhooks/")
-
-
-def send_discord_webhook(webhook: str, message: str):
-    try:
-        requests.post(webhook, json={"content": message}, timeout=5)
-    except Exception:
-        pass
 
 
 def send_discord_webhook_sync(webhook: str, message: str) -> tuple[bool, str]:
@@ -39,65 +34,6 @@ def send_discord_webhook_sync(webhook: str, message: str) -> tuple[bool, str]:
         return False, "Request timed out after 5 seconds"
     except Exception as e:
         return False, str(e)
-
-
-@event.listens_for(Solves, "after_insert")
-def first_blood_listener(mapper, connection, solve):
-    logger.info("[FirstBlood] after_insert fired: challenge_id=%s user_id=%s", solve.challenge_id, solve.user_id)
-    challenge_id = solve.challenge_id
-
-    try:
-        result = connection.execute(
-            text("SELECT COUNT(*) FROM solves WHERE challenge_id = :cid"),
-            {"cid": challenge_id},
-        )
-        count = result.scalar()
-    except Exception as e:
-        logger.error("[FirstBlood] count query failed: %s", e)
-        return
-
-    logger.info("[FirstBlood] solve count for challenge %s: %d", challenge_id, count)
-    if count != 1:
-        return
-
-    challenge_row = connection.execute(
-        text("SELECT name FROM challenges WHERE id = :id"),
-        {"id": challenge_id},
-    ).fetchone()
-
-    user_row = connection.execute(
-        text("SELECT name FROM users WHERE id = :id"),
-        {"id": solve.user_id},
-    ).fetchone()
-
-    team_row = None
-    if solve.team_id:
-        team_row = connection.execute(
-            text("SELECT name FROM teams WHERE id = :id"),
-            {"id": solve.team_id},
-        ).fetchone()
-
-    if not challenge_row or not user_row:
-        logger.warning("[FirstBlood] missing rows: challenge=%s user=%s", challenge_row, user_row)
-        return
-
-    solver_name = team_row.name if team_row else user_row.name
-    challenge_name = challenge_row.name
-
-    message = f"🎯🩸 First Blood for challenge **{challenge_name}** goes to **{solver_name}**"
-
-    webhook = get_config("FIRST_BLOOD_WEBHOOK")
-    logger.info("[FirstBlood] webhook config: %s", webhook)
-    if not webhook or not is_valid_webhook(webhook):
-        logger.warning("[FirstBlood] webhook not set or invalid, skipping")
-        return
-
-    logger.info("[FirstBlood] spawning thread to send webhook for challenge %s", challenge_name)
-    threading.Thread(
-        target=send_discord_webhook,
-        args=(webhook, message),
-        daemon=True,
-    ).start()
 
 
 class FirstBloodForm(BaseForm):
@@ -154,4 +90,67 @@ def test_webhook():
 
 def load(app):
     app.register_blueprint(admin_blueprint)
+
+    TEAMS_MODE = ctfd_config.is_teams_mode()
+
+    def challenge_attempt_decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            result = f(*args, **kwargs)
+
+            if not isinstance(result, Response):
+                return result
+
+            data = result.json
+            if not (
+                isinstance(data, dict)
+                and data.get("success") is True
+                and isinstance(data.get("data"), dict)
+                and data["data"].get("status") == "correct"
+            ):
+                return result
+
+            # Parse challenge_id from request
+            if request.content_type == "application/json":
+                request_data = request.get_json() or {}
+            else:
+                request_data = request.form
+            challenge_id = request_data.get("challenge_id")
+
+            challenge = Challenges.query.filter_by(id=challenge_id).first()
+            if not challenge:
+                return result
+
+            solvers = Solves.query.filter_by(challenge_id=challenge.id)
+            if TEAMS_MODE:
+                solvers = solvers.filter(Solves.team.has(hidden=False))
+            else:
+                solvers = solvers.filter(Solves.user.has(hidden=False))
+            num_solves = solvers.count()
+
+            logger.warning("[FirstBlood] challenge=%s solves=%d", challenge.name, num_solves)
+
+            if num_solves != 1:
+                return result
+
+            webhook = get_config("FIRST_BLOOD_WEBHOOK")
+            logger.warning("[FirstBlood] webhook=%s", webhook)
+            if not webhook or not is_valid_webhook(webhook):
+                return result
+
+            user = get_current_user()
+            team = get_current_team()
+            solver_name = team.name if team else user.name
+
+            message = f"🎯🩸 First Blood for challenge **{challenge.name}** goes to **{solver_name}**!"
+            ok, err = send_discord_webhook_sync(webhook, message)
+            if not ok:
+                logger.error("[FirstBlood] webhook send failed: %s", err)
+
+            return result
+        return wrapper
+
+    app.view_functions['api.challenges_challenge_attempt'] = challenge_attempt_decorator(
+        app.view_functions['api.challenges_challenge_attempt']
+    )
     app.logger.info("First Blood plugin loaded")
