@@ -4,7 +4,7 @@ from sqlalchemy import event, text
 from flask import Blueprint, request, redirect, url_for, flash, render_template_string
 from CTFd.models import Solves, Challenges, Users, Teams, db
 from CTFd.utils.decorators import admins_only
-from CTFd.utils.config import get_config, set_config
+from CTFd.utils import get_config, set_config
 
 
 def is_valid_webhook(url: str) -> bool:
