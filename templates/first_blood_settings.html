@@ -1,0 +1,34 @@
+{% extends "admin/base.html" %}
+
+{% block content %}
+<div class="jumbotron">
+    <div class="container">
+        <h1>First Blood Settings</h1>
+    </div>
+</div>
+<div class="container">
+    <div class="row">
+        <div class="col-md-6 offset-md-3">
+            {% include "components/errors.html" %}
+
+            <form method="post" accept-charset="utf-8" autocomplete="off">
+                <div class="form-group">
+                    <b>{{ form.webhook.label }}</b>
+                    {{ form.webhook(class="form-control", placeholder="https://discord.com/api/webhooks/...") }}
+                    <small class="form-text text-muted">
+                        Must be a discord.com or discordapp.com webhook URL.
+                    </small>
+                </div>
+                <div class="row mt-3">
+                    <div class="col">
+                        {{ form.submit(class="btn btn-md btn-primary btn-outlined") }}
+                        <a href="{{ url_for('first_blood_admin.test_webhook') }}"
+                           class="btn btn-md btn-secondary btn-outlined ml-2">Test Webhook</a>
+                    </div>
+                </div>
+                {{ form.nonce() }}
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

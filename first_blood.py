@@ -1,10 +1,14 @@
 import threading
 import requests
 from sqlalchemy import event, text
-from flask import Blueprint, request, redirect, url_for, flash, render_template_string
+from flask import Blueprint, request, redirect, url_for, flash, render_template
 from CTFd.models import Solves, Challenges, Users, Teams, db
 from CTFd.utils.decorators import admins_only
 from CTFd.utils import get_config, set_config
+from CTFd.forms import BaseForm
+from CTFd.forms.fields import SubmitField
+from wtforms import StringField
+from wtforms.validators import Optional
 
 
 def is_valid_webhook(url: str) -> bool:
@@ -68,39 +72,23 @@ def first_blood_listener(mapper, connection, solve):
     ).start()
 
 
-admin_blueprint = Blueprint("first_blood_admin", __name__)
+class FirstBloodForm(BaseForm):
+    webhook = StringField("Discord Webhook URL", validators=[Optional()])
+    submit = SubmitField("Save Webhook")
 
-SETTINGS_TEMPLATE = """
-{% extends "admin/base.html" %}
-{% block content %}
-<div class="container">
-  <h1>First Blood Settings</h1>
-  <form method="post">
-    <div class="form-group">
-      <label>Discord Webhook URL</label>
-      <input
-        type="text"
-        class="form-control"
-        name="webhook"
-        placeholder="https://discord.com/api/webhooks/..."
-        value="{{ webhook | e }}"
-      >
-      <small class="form-text text-muted">
-        Must be a discord.com webhook URL.
-      </small>
-    </div>
-    <button type="submit" class="btn btn-primary mt-3">Save Webhook</button>
-    <a href="{{ url_for('first_blood_admin.test_webhook') }}"
-       class="btn btn-secondary mt-3 ml-2">Test Webhook</a>
-  </form>
-</div>
-{% endblock %}
-"""
+
+admin_blueprint = Blueprint(
+    "first_blood_admin",
+    __name__,
+    template_folder="templates",
+)
 
 
 @admin_blueprint.route("/admin/first-blood", methods=["GET", "POST"])
 @admins_only
 def first_blood_settings():
+    form = FirstBloodForm()
+
     if request.method == "POST":
         webhook = request.form.get("webhook", "").strip()
 
@@ -110,11 +98,11 @@ def first_blood_settings():
 
         set_config("FIRST_BLOOD_WEBHOOK", webhook)
 
-        flash("First Blood webhook saved", "success")
+        flash("First Blood webhook saved.", "success")
         return redirect(url_for("first_blood_admin.first_blood_settings"))
 
-    webhook = get_config("FIRST_BLOOD_WEBHOOK") or ""
-    return render_template_string(SETTINGS_TEMPLATE, webhook=webhook)
+    form.webhook.data = get_config("FIRST_BLOOD_WEBHOOK") or ""
+    return render_template("first_blood_settings.html", form=form)
 
 
 @admin_blueprint.route("/admin/first-blood/test")
@@ -132,10 +120,10 @@ def test_webhook():
     ).start()
     threading.Thread(
         target=send_discord_webhook,
-        args=(f"🎯🩸 First Blood for a non-existent challenge **hehehehehe** goes to **BKSEC Organizers**",),
+        args=("🎯🩸 First Blood for a non-existent challenge **hehehehehe** goes to **BKSEC Organizers**",),
         daemon=True,
     ).start()
-    flash("Test message sent", "info")
+    flash("Test message sent.", "info")
     return redirect(url_for("first_blood_admin.first_blood_settings"))
 
 
